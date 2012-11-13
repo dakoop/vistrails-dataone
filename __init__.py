@@ -5,7 +5,7 @@
 ## Copyright (C) 2012, NYU-Poly.
 ###############################################################################
 
-from vistrails.core.configuration import ConfigurationObject
+from core.configuration import ConfigurationObject
 from identifiers import *
 
 configuration = ConfigurationObject(cn_url=(None, str),

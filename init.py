@@ -1,3 +1,10 @@
+###############################################################################
+## VisTrails wrapper for DataONE
+## By David Koop, dkoop@poly.edu
+##
+## Copyright (C) 2012, NYU-Poly.
+###############################################################################
+
 import datetime
 import os
 import shutil

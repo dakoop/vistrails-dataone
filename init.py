@@ -22,45 +22,10 @@ from d1_client.cnclient import CoordinatingNodeClient
 
 from access_control import access_control
 from replication_policy import replication_policy
+from data_package import DataPackage
 import identifiers
+import utils
 
-my_d1_mn_client = None
-my_d1_cn_client = None
-default_cn_url = None
-default_mn_url = None
-default_cert_file = None
-default_key_file = None
-default_anonymous = True
-
-def create_d1_mn_client(mn_url=None, cert_file=None, key_file=None):
-    global my_d1_mn_client
-    if mn_url is None:
-        mn_url = default_mn_url
-    if cert_file is None:
-        cert_file = default_cert_file
-        if key_file is None:
-            key_file = default_key_file
-    elif key_file is None:
-        key_file = cert_file
-    my_d1_mn_client = MemberNodeClient(mn_url, cert_path=cert_file, 
-                                       key_path=key_file)
-    return my_d1_mn_client
-    
-def get_d1_mn_client(*args, **kwargs):
-    return create_d1_mn_client(*args, **kwargs)
-    # if my_d1_client is None:
-    #     return create_d1_client()
-    # return my_d1_client
-
-def create_d1_cn_client(cn_url=None):
-    global my_d1_cn_client
-    if cn_url is None:
-        cn_url = default_cn_url
-    my_d1_cn_client = CoordinatingNodeClient(cn_url)
-    return my_d1_cn_client
-
-def get_d1_cn_client(*args, **kwargs):
-    return create_d1_cn_client(*args, **kwargs)
 
 D1DateTime = new_constant("D1DateTime", staticmethod(str), "", 
                           staticmethod(lambda x: type(x) == str),
@@ -69,6 +34,28 @@ D1Identifier = new_constant("D1Identifier", staticmethod(str), "",
                             staticmethod(lambda x: type(x) == str),
                             base_class=String)
 D1Identifier._input_ports = [('value', String)]
+
+def get_cn_url(module, required=True):
+    if module.hasInputFromPort("coordinatingNodeURL"):
+        return module.getInputFromPort("coordinatingNodeURL")
+    elif configuration.check("cn_url"):
+        return configuration.cn_url
+    elif required:
+        raise ModuleError(module, "The Coordinating Node URL is required. " \
+                              "Please set it globally in the package " \
+                              "configuration or as a parameter.")
+    return None
+
+def get_mn_url(module, required=True):
+    if module.hasInputFromPort("memberNodeURL"):
+        return module.getInputFromPort("memberNodeURL")
+    elif configuration.check("mn_url"):
+        return configuration.mn_url
+    elif required:
+        raise ModuleError(module, "The Member Node URL is required. " \
+                              "Please set it globally in the package " \
+                              "configuration or as a parameter.")
+    return None
 
 class D1Authentication(Module):
     _input_ports = [("keyFile", "(edu.utah.sci.vistrails.basic:File)"),
@@ -185,9 +172,21 @@ class D1SystemMetadata(Module):
         if self.hasInputFromPort("checksum"):
             self.checksum = self.getInputFromPort("checksum")
 
+    def to_dict(self):
+        return {"access_policy": self.access_policy,
+                "replication_policy": self.replication_policy,
+                "format_id": self.format,
+                "submitter": self.submitter,
+                "owner": self.owner,
+                "origin_mn": self.origin_mn,
+                "auth_mn": self.auth_mn,
+                "algorithm": self.checksum}
+
 class D1GetObject(Module):
     _input_ports = [("identifier", "(%s:D1Identifier)" % identifiers.identifier),
                     ("coordinatingNodeURL", 
+                     "(edu.utah.sci.vistrails.basic:String)"),
+                    ("memeberNodeURL",
                      "(edu.utah.sci.vistrails.basic:String)")]
     _output_ports = [("file", "(edu.utah.sci.vistrails.basic:File)")]
 
@@ -198,43 +197,29 @@ class D1GetObject(Module):
 
         pid = self.getInputFromPort("identifier")
 
-        cn_url = None
-        if self.hasInputFromPort("coordinatingNodeURL"):
-            cn_url = self.getInputFromPort("coordinatingNodeURL")
-        cn_client = get_d1_cn_client(cn_url=cn_url)
-        result = cn_client.resolve(pid)
-        file_like_object = None
-        for mn_url in result.objectLocation:
-            mn_client = get_d1_mn_client(mn_url.baseURL)
-            try:
-                file_like_object = get_method(mn_client, pid)
-            except Exception:
-                pass
-        if file_like_object is None:
+        cn_url = get_cn_url(self)
+        mn_url = get_mn_url(self)
+        cn_client = utils.get_d1_cn_client(cn_url=cn_url)
+        mn_client = utils.get_d1_mn_client(mn_url=mn_url)
+        self.annotate({'cn_url': cn_url, 'mn_url': used_mn_url})
+        output_file = self.interpreter.filePool.create_file()
+        # FIXME would be nice to know which member node the data was
+        # downloaded from
+        res = get_method(pid, mn_client, cn_client, True, output_file.name)
+        if res is None:
             raise ModuleError(self, "Object could not be retrieved")
-            
-        try:
-            output_file = self.interpreter.filePool.create_file()
-            output_f = open(output_file.name, 'wb')
-            shutil.copyfileobj(file_like_object, output_f)
-            output_f.close()
-        except EnvironmentError as (errno, strerror):
-            error_message_lines = []
-            error_message_lines.append(
-                'Could not write to object_file: {0}'.format(path))
-            error_message_lines.append(
-                'I/O error({0}): {1}'.format(errno, strerror))
-            error_message = '\n'.join(error_message_lines)
-            raise ModuleError(self, error_message)
 
         # do something with identifier.pid and output_file.name
         self.setResult("file", output_file)
 
 class D1GetMetadata(D1GetObject):
     @staticmethod
-    def get_metadata(mn_client, *args, **kwargs):
-        sysmeta = mn_client.getSystemMetadata(*args, **kwargs)
-        return StringIO(sysmeta.toxml())
+    def get_metadata(pid, mn_client, cn_client, full_resolve, output_fname):
+        res = utils.get_sysmeta_by_pid(pid, full_resolve, cn_client, mn_client)
+        if res is not None:
+            utils.write_file_output(StringIO(res.to_xml()), 
+                                    output_file.name)
+        return output_file.name
 
     def compute(self):
         # getSystemMetadata returns a pyxb object that can be
@@ -243,103 +228,167 @@ class D1GetMetadata(D1GetObject):
         D1GetObject.compute(self, D1GetMetadata.get_metadata)
 
 class D1GetData(D1GetObject):
+    @staticmethod
+    def get_data(pid, mn_client, cn_client, full_resolve, output_fname):
+        return utils.get_object_by_pid(pid, output_fname, full_resolve, 
+                                       mn_client, cn_client)
+        
     def compute(self):
-        D1GetObject.compute(self, MemberNodeClient.get)
+        D1GetObject.compute(self, D1GetData.get_data)
 
-class D1PutData(Module):
-    _input_ports = [("inputFile", "(edu.utah.sci.vistrails.basic:File)"),
-                    ("identifier", "(%s:D1Identifier)" % \
-                         identifiers.identifier),
-                    ("memberNodeURL", "(edu.utah.sci.vistrails.basic:String)"),
+class D1PutObject(Module):
+    _input_ports = [("memberNodeURL", "(edu.utah.sci.vistrails.basic:String)"),
+                    ("coordinatingNodeURL", 
+                     "(edu.utah.sci.vistrails.basic:String)"),
                     ("authentication", "(%s:D1Authentication)" % \
                          identifiers.identifier),
                     ("systemMetadata", "(%s:D1SystemMetadata)" % \
                          identifiers.identifier),
+                    ("updateIfExists", 
+                     "(edu.utah.sci.vistrails.basic:Boolean)", True)
                     ]
-    _output_ports = []
+    
+    def create_object(self, pid, mn_client, cn_client):
+        raise ModuleError(self, "A subclass of D1PutObject must define " \
+                              "the create_object method.")
 
-    """get_checksum copied from DataONECLI"""
-    def get_checksum(self, path, algorithm='SHA-1', block_size=1024 * 1024):
-        h = d1_common.util.get_checksum_calculator_by_dataone_designator(
-            algorithm)
-        with open(path, 'r') as f:
-          while True:
-            data = f.read(block_size)
-            if not data:
-                break
-            h.update(data)
-        return h.hexdigest()
+    def update_object(self, pid, mn_client, cn_client):
+        raise ModuleError(self, "A subclass of D1PutObject must define " \
+                              "the update_object method")
 
-    """get_file_size copied from DataONECLI"""
-    def get_file_size(self, path):
-        with open(path, 'r') as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-        return size
-
-    def compute(self):
-        pid = self.getInputFromPort("identifier")
-        obj = self.getInputFromPort("inputFile")
-
-        mn_url = None
+    def compute(self, pid):
         cert_file = None
         key_file = None
-        if self.hasInputFromPort("memberNodeURL"):
-            mn_url = self.getInputFromPort("memberNodeURL")
+        cn_url = get_cn_url(self)
+        mn_url = get_mn_url(self)
+
         if self.hasInputFromPort("authentication"):
             auth = self.getInputFromPort("authentication")
             cert_file = auth.cert_file
             key_file = auth.key_file
-        mn_client = get_d1_mn_client(mn_url=mn_url, cert_file=cert_file, 
-                                     key_file=key_file)
 
-        # FIXME need to determine what meta needs to look like
-        local_sysmeta = self.getInputFromPort("systemMetadata")
-        # print "local_sysmeta:", local_sysmeta
-        checksum = self.get_checksum(obj.name, local_sysmeta.checksum)
-        file_size = self.get_file_size(obj.name)
+        self.annotate({"cn_url": cn_url, "mn_url": mn_url})
+
+        mn_client = utils.get_d1_mn_client(mn_url=mn_url, cert_file=cert_file, 
+                                           key_file=key_file)
+        cn_client = utils.get_d1_cn_client(cn_url=cn_url)
         
-        sysmeta = dataoneTypes.systemMetadata()
-        sysmeta.serialVersion = 1
-        sysmeta.identifier = pid
-        if local_sysmeta.format is None:
-            sysmeta.formatId = 'text/csv'
+        # if it already exists
+        if utils.get_sysmeta_by_pid(pid, True, cn_client, mn_client):
+            if not self.forceGetInputFromPort("updateIfExists", False):
+                raise ModuleError(self, 'Cannot add data: ' \
+                                      'identifer "%s" already exists.')
+            else:
+                self.update_object(pid, mn_client, cn_client)
+        self.create_object(pid, mn_client, cn_client)
+
+class D1PutData(D1PutObject):
+    _input_ports = [("identifier", "(%s:D1Identifier)" % \
+                         identifiers.identifier),
+                    ("inputFile", "(edu.utah.sci.vistrails.basic:File)")]
+
+    def create_object(self, pid, mn_client, cn_client):
+        obj = self.getInputFromPort("inputFile")
+        if self.hasInputFromPort("systemMetadata"):
+            local_sysmeta = self.getInputFromPort("systemMetadata")
+            sysmeta_kwargs = local_sysmeta.to_dict()
         else:
-            sysmeta.formatId = local_sysmeta.format
-        sysmeta.size = file_size
-        if local_sysmeta.submitter is None:
-            sysmeta.submitter = "DAKOOP_TEST"
-        else:
-            sysmeta.submitter = local_sysmeta.submitter
-        if local_sysmeta.owner is None:
-            sysmeta.rightsHolder = "DAKOOP_TEST"
-        else:
-            sysmeta.rightsHolder = local_sysmeta.owner
-        sysmeta.checksum = dataoneTypes.checksum(checksum)
-        sysmeta.checksum.algorithm = local_sysmeta.checksum
-        sysmeta.dateUploaded = datetime.datetime.utcnow()
-        sysmeta.dateSysMetadataModified = datetime.datetime.utcnow()
-        if local_sysmeta.origin_mn is None:
-            sysmeta.originmn = mn_client.base_url
-        else:
-            sysmeta.originmn = local_sysmeta.origin_mn
-        if local_sysmeta.auth_mn is None:
-            sysmeta.authoritativemn = mn_client.base_url
-        else:
-            sysmeta.authoritativemn = local_sysmeta.auth_mn
-        if local_sysmeta.access_policy is None:
-            sysmeta.accessPolicy = access_control().to_pyxb()
-        else:
-            sysmeta.accessPolicy = local_sysmeta.access_policy.to_pyxb()
-        if local_sysmeta.replication_policy is None:
-            sysmeta.replicationPolicy = replication_policy().to_pyxb()
-        else:
-            sysmeta.replicationPolicy = \
-                local_sysmeta.replication_policy.to_pyxb()
-        
+            sysmeta_kwargs = {}
+        sysmeta = utils.create_sysmeta_from_path(pid, obj.name, 
+                                                 **sysmeta_kwargs)
+
         f = open(obj.name, 'r')
         retval = mn_client.create(pid, f, sysmeta)
-        print "RETVAL:", retval
+        f.close()
+
+    def update_object(self, pid, mn_client, cn_client):
+        raise ModuleError("Update is not implemented yet.")
+
+    def compute(self):
+        pid = self.getInputFromPort("identifier")
+        D1PutObject.compute(self, pid)
+
+class D1DataObject(Module):
+    _input_ports = [("identifier", "(%s:D1Identifier)" % \
+                         identifiers.identifier),
+                    ("file", "(edu.utah.sci.vistrails.basic:File)"),
+                    ("formatId", "(edu.utah.sci.vistrails.basic:String)", 
+                     True)]
+    _output_ports = [("self", "(%s:D1DataObject)" % identifiers.identifier)]
+
+    def __init__(self):
+        Module.__init__(self)
+        self.identifier = None
+        self.filename = None
+        self.format_id = None
+
+    def compute(self):
+        self.identifier = self.getInputFromPort("identifier")
+        if self.hasInputFromPort("file"):
+            self.filename = self.getInputFromPort("file").name
+        if self.hasInputFromPort("formatId"):
+            self.format_id = self.getInputFromPort("formatId")
+
+class D1Package(Module):
+    _input_ports = [("identifier", "(%s:D1Identifier)" % \
+                         identifiers.identifier),
+                    ("data", "(%s:D1DataObject)" % identifiers.identifier),
+                    ("metadata", "(%s:D1DataObject)" % identifiers.identifier)]
+    _output_ports = [("self", "(%s:D1Package)" % identifiers.identifier)]
+
+    def __init__(self):
+        Module.__init__(self)
+        self.meta = None
+        self.data_list = []
+
+    def compute(self):
+        self.identifier = self.getInputFromPort("identifier")
+        self.meta = self.getInputFromPort("metadata")
+        self.data_list = self.getInputListFromPort("data")
+
+class D1PutPackage(D1PutObject):
+    _input_ports = [("package", "(%s:D1Package)" % \
+                         identifiers.identifier),
+                    ]
+
+    def create_object(self, pid, mn_client, cn_client):
+        local_pkg = self.getInputFromPort("package")
+        pkg = DataPackage(pid)
+
+        if self.hasInputFromPort("systemMetadata"):
+            local_sysmeta = self.getInputFromPort("systemMetadata")
+            sysmeta_kwargs = local_sysmeta.to_dict()
+        else:
+            sysmeta_kwargs = {}
+
+        sysmeta_kwargs["format_id"] = local_pkg.meta.format_id
+        pkg.scimeta_add(local_pkg.meta.identifier, local_pkg.meta.filename,
+                        **sysmeta_kwargs)
+        for obj in local_pkg.data_list:
+            sysmeta_kwargs["format_id"] = obj.format_id
+            pkg.scidata_add(obj.identifier, obj.filename, **sysmeta_kwargs)
+        del sysmeta_kwargs["format_id"]
+        pkg.save(mn_client, cn_client, **sysmeta_kwargs)
+        
+    def update_object(self, pid, mn_client, cn_client):
+        raise ModuleError("Update is not implemented yet.")
+
+    def compute(self):
+        local_pkg = self.getInputFromPort("package")
+        D1PutObject.compute(self, local_pkg.identifier)
+
+class D1GetPackage(Module):
+    _input_ports = [("identifier", "(%s:D1Identifier)" % \
+                         identifiers.identifier),
+                    ("coordinatingNodeURL", 
+                     "(edu.utah.sci.vistrails.basic:String)"),
+                    ("authentication", "(%s:D1Authentication)" % \
+                         identifiers.identifier)]
+    
+    # FIXME
+    def compute(self):
+        raise ModuleError(self, "Not implemented yet.")
+
 
 # Search Fields parsed from:
 # http://mule1.dataone.org/ArchitectureDocs-current/design/SearchMetadata.html
@@ -446,21 +495,12 @@ class D1Search(Module):
 _modules = [D1DateTime, D1Identifier, 
             # D1Search, 
             (D1GetObject, {"abstract": True}),
+            (D1PutObject, {"abstract": True}),
             D1GetData, D1GetMetadata,
             D1Authentication, D1AccessPolicy, D1ReplicationPolicy, 
-            D1SystemMetadata, D1PutData]
+            D1SystemMetadata, 
+            D1PutData, D1DataObject, D1Package, D1PutPackage]
 
 
 def initialize():
-    global default_cn_url, default_mn_url, default_cert_file, default_key_file
-    
-    if configuration.check('cn_url'):
-        default_cn_url = configuration.cn_url
-    if configuration.check('mn_url'):
-        default_mn_url = configuration.mn_url
-    if configuration.check('cert_file'):
-        default_cert_file = configuration.cert_file
-    if configuration.check('key_file'):
-        default_key_file = configuration.key_file
-    if configuration.check('anonymous'):
-        default_anonymous = configuration.anonymous
+    pass

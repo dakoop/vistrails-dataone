@@ -65,7 +65,7 @@ except ImportError as e:
 
 # vistrails package
 import utils
-from config import get_d1_config
+from config import configuration
 
 ALLOWABLE_PACKAGE_SERIALIZATIONS = ('xml', 'pretty-xml', 'n3', 'rdfa', 'json',
                                     'pretty-json', 'turtle', 'nt', 'trix')
@@ -200,8 +200,7 @@ class DataPackage(object):
         if not pkg_xml:
             raise Exception("Couldn't serialize object.")
 
-        d1_config = get_d1_config()
-        algorithm = d1_config.default_checksum
+        algorithm = configuration.checksum_alg
         hash_fcn = util.get_checksum_calculator_by_dataone_designator(algorithm)
         hash_fcn.update(pkg_xml)
         checksum = hash_fcn.hexdigest()
@@ -300,8 +299,8 @@ class DataPackage(object):
                 raise Exception('%s: file not found' % complex_path.path)
             if not format_id:
                 format_id = complex_path.formatId
-            if not format_id:
-                format_id = get_d1_config().default_format
+            if not format_id and configuration.check("format"):
+                format_id = configuration.format
             if not format_id:
                 raise Exception('The object format could not be determined and was not defined.')
             if not self._is_metadata_format(format_id):
@@ -342,14 +341,14 @@ class DataPackage(object):
             complex_path = utils.create_complex_path(file_name)
             if not format_id:
                 format_id = complex_path.formatId
-            if not format_id:
-                format_id = get_d1_config().default_format
+            if not format_id and configuration.check("format"):
+                format_id = configuration.format
             if not format_id:
                 raise Exception('The object format could not be determined and was not defined.')
-            else:
-                meta = utils.create_sysmeta_from_path(pid, complex_path.path,
-                                                      format_id=format_id, **kwargs)
-                self.scidata_dict[pid] = DataObject(pid, True, complex_path.path, None, meta, format_id)
+            meta = utils.create_sysmeta_from_path(pid, complex_path.path,
+                                                  format_id=format_id, **kwargs)
+            self.scidata_dict[pid] = DataObject(pid, True, complex_path.path, 
+                                                None, meta, format_id)
 
         else:
             sysmeta = utils.get_sysmeta_by_pid(pid, True)
@@ -625,24 +624,25 @@ class DataObject(object):
 
 
 def run_pkg_test():
-    mn_url = "https://mn-demo-9.test.dataone.org/knb/d1/mn"
-    cn_client = utils.get_d1_cn_client("https://cn-stage-2.test.dataone.org/cn")
-    mn_client = utils.get_d1_mn_client(mn_url)
+    configuration.mn_url = "https://mn-demo-9.test.dataone.org/knb/d1/mn"
+    configuration.cn_url = "https://cn-stage-2.test.dataone.org/cn"
+    cn_client = utils.get_d1_cn_client()
+    mn_client = utils.get_d1_mn_client()
 
-    pid = "dakoop_test_pkg600"
-    meta_pid = "dakoop_cadwsap001"
+    pid = "dakoop_test_pkg603"
+    meta_pid = "dakoop_cadwsap003"
     meta_fname = \
         "/vistrails/local_packages/dataone/package_data/cadwsap-s2910001-001.xml"
     meta_format = "FGDC-STD-001-1998"
-    data_list = [("dakoop_cadwsap_main001", "/vistrails/local_packages/dataone/package_data/cadwsap-s2910001-001-main.csv", "text/csv"),
-                 ("dakoop_cadwsap_vuln001", "/vistrails/local_packages/dataone/package_data/cadwsap-s2910001-001-vuln.csv", "text/csv")]
+    data_list = [("dakoop_cadwsap_main003", "/vistrails/local_packages/dataone/package_data/cadwsap-s2910001-001-main.csv", "text/csv"),
+                 ("dakoop_cadwsap_vuln003", "/vistrails/local_packages/dataone/package_data/cadwsap-s2910001-001-vuln.csv", "text/csv")]
 
     pkg = DataPackage(pid)
     sysmeta_kwargs = {"format_id": meta_format,
                       "submitter": "dakoop",
                       "owner": "dakoop",
-                      "orig_mn": mn_url,
-                      "auth_mn": mn_url}
+                      "orig_mn": configuration.mn_url,
+                      "auth_mn": configuration.mn_url}
     pkg.scimeta_add(meta_pid, meta_fname, **sysmeta_kwargs)
     for (data_pid, data_fname, data_format) in data_list:
         sysmeta_kwargs["format_id"] = data_format

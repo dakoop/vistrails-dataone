@@ -63,7 +63,7 @@ except ImportError as e:
     raise
 
 # Package-specific
-from config import get_d1_config
+from config import configuration
 import access_control as access_control_module
 import replication_policy as replication_policy_module
 
@@ -73,17 +73,26 @@ REST_URL_Get = 'object'
 
 #== CN/MN client access =======================================================
 
+def get_default_mn_url():
+    if configuration.check("mn_url"):
+        return configuration.mn_url
+    return None
+
+def get_default_cn_url():
+    if configuration.check("cn_url"):
+        return configuration.cn_url
+    return None
+
 def create_d1_mn_client(mn_url=None, cert_file=None, key_file=None):
-    d1_config = get_d1_config()
+    if mn_url is None and configuration.check("mn_url"):
+        mn_url = configuration.mn_url
     if mn_url is None:
-        mn_url = d1_config.default_mn_url
-    if mn_url is None:
-        raise Exception("Must specify coordinating node URL")
+        raise Exception("Must specify member node URL")
     if cert_file is None:
-        cert_file = d1_config.default_cert_file
-        if key_file is None:
-            key_file = d1_config.default_key_file
-    elif key_file is None:
+        cert_file = configuration.cert_file
+        if key_file is None and configuration.check("key_file"):
+            key_file = configuration.key_file
+    if key_file is None:
         key_file = cert_file
     my_d1_mn_client = \
         d1_client.mnclient.MemberNodeClient(mn_url, cert_path=cert_file,
@@ -97,9 +106,8 @@ def get_d1_mn_client(*args, **kwargs):
     # return my_d1_client
 
 def create_d1_cn_client(cn_url=None):
-    d1_config = get_d1_config()
-    if cn_url is None:
-        cn_url = d1_config.default_cn_url
+    if cn_url is None and configuration.check("cn_url"):
+        cn_url = configuration.cn_url
     if cn_url is None:
         raise Exception("Must specify coordinating node URL")
     my_d1_cn_client = d1_client.cnclient.CoordinatingNodeClient(cn_url)
@@ -114,7 +122,6 @@ def create_system_metadata(pid, size, checksum, algorithm=None, format_id=None,
                            access_policy=None, replication_policy=None,
                            submitter=None, owner=None, orig_mn=None,
                            auth_mn=None):
-    d1_config = get_d1_config()
     sysmeta = dataoneTypes.systemMetadata()
     sysmeta.serialVersion = 1
     sysmeta.identifier = pid
@@ -123,30 +130,32 @@ def create_system_metadata(pid, size, checksum, algorithm=None, format_id=None,
     sysmeta.dateUploaded = datetime.datetime.utcnow()
     sysmeta.dateSysMetadataModified = datetime.datetime.utcnow()
 
+    print "utils CONFIGURATION:", id(configuration), configuration
+
     if algorithm is not None:
         sysmeta.checksum.algorithm = algorithm
     else:
-        sysmeta.checksum.algorithm = d1_config.default_checksum
+        sysmeta.checksum.algorithm = configuration.checksum_alg
     if format_id is not None:
         sysmeta.formatId = format_id
     else:
-        sysmeta.formatId = d1_config.default_format
+        sysmeta.formatId = configuration.format
     if submitter is not None:
         sysmeta.submitter = submitter
     else:
-        sysmeta.submitter = d1_config.default_submitter
+        sysmeta.submitter = configuration.submitter
     if owner is not None:
         sysmeta.rightsHolder = owner
     else:
-        sysmeta.rightsHolder = d1_config.default_owner
+        sysmeta.rightsHolder = configuration.owner
     if orig_mn is not None:
         sysmeta.originmn = orig_mn
     else:
-        sysmeta.originmn = d1_config.default_orig_mn
+        sysmeta.originmn = configuration.orig_mn
     if auth_mn is not None:
         sysmeta.authoritativemn = auth_mn
     else:
-        sysmeta.authoritativemn = d1_config.default_auth_mn
+        sysmeta.authoritativemn = configuration.auth_mn
     if access_policy is not None:
         sysmeta.accessPolicy = access_policy.to_pyxb()
     else:
@@ -157,88 +166,6 @@ def create_system_metadata(pid, size, checksum, algorithm=None, format_id=None,
         sysmeta.replicationPolicy = \
             replication_policy_module.replication_policy().to_pyxb()
     return sysmeta
-
-#===============================================================================
-
-# class CLIClient(object):
-#   def __init__(self, session, base_url):
-#     try:
-#       self.session = session
-#       self.base_url = base_url
-#       return super(CLIClient, self).__init__(
-#         self.base_url,
-#         cert_path=self._get_certificate(),
-#         key_path=self._get_certificate_private_key())
-#     except d1_common.types.exceptions.DataONEException as e:
-#       err_msg = []
-#       err_msg.append('Unable to connect to: {0}'.format(self.base_url))
-#       err_msg.append('{0}'.format(e.friendly_format()))
-#       raise cli_exceptions.CLIError('\n'.join(err_msg))
-
-
-#   def _get_cilogon_certificate_path(self):
-#     return '/tmp/x509up_u{0}'.format(os.getuid())
-
-
-#   def _assert_certificate_present(self, path):
-#     if not os.path.exists(path):
-#       raise cli_exceptions.CLIError('Certificate not found')
-
-
-#   def _get_certificate(self):
-#     if self.session.get(ANONYMOUS_sect, ANONYMOUS_name):
-#       return None
-#     cert_path = self.session.get(CERT_FILENAME_sect, CERT_FILENAME_name)
-#     if not cert_path:
-#       cert_path = self._get_cilogon_certificate_path()
-#     self._assert_certificate_present(cert_path)
-#     return cert_path
-
-
-#   def _get_certificate_private_key(self):
-#     if self.session.get(ANONYMOUS_sect, ANONYMOUS_name):
-#       return None
-#     key_path = self.session.get(KEY_FILENAME_sect, KEY_FILENAME_name)
-#     if key_path is not None:
-#       self._assert_certificate_present(key_path)
-#     return key_path
-
-# #===============================================================================
-
-# class CLIMNClient(CLIClient, d1_client.mnclient.MemberNodeClient):
-#   def __init__(self, session, mn_url=None):
-#     if mn_url is None:
-#       mn_url = session.get(MN_URL_sect, MN_URL_name)
-#     self._assert_mn_url(mn_url);
-#     return super(CLIMNClient, self).__init__(session, mn_url)
-
-#   def _assert_mn_url(self, mn_url):
-#     if not mn_url:
-#       raise cli_exceptions.CLIError('"' + MN_URL_name + '" parameter required')
-
-#   def get_url_for_pid(self, pid):
-#     return create_get_url_for_pid(self.base_url, pid)
-
-#   def get(self, *args, **kwargs):
-#     print "== RUNNING GET =="
-#     print args, kwargs, self.base_url
-#     return d1_client.mnclient.MemberNodeClient.get(self, *args, **kwargs)
-
-# #===============================================================================
-
-# class CLICNClient(CLIClient, d1_client.cnclient.CoordinatingNodeClient):
-#   def __init__(self, session, dataone_url=None):
-#     if dataone_url is None:
-#       dataone_url = session.get(CN_URL_sect, CN_URL_name)
-#     self._assert_dataone_url(dataone_url);
-#     return super(CLICNClient, self).__init__(session, dataone_url)
-
-#   def _assert_dataone_url(self, dataone_url):
-#     if not dataone_url:
-#       raise cli_exceptions.CLIError('"' + CN_URL_name + '" parameter required')
-
-
-#== Static methods =============================================================
 
 #== FROM cli_util.py ==========================================================
 
@@ -304,7 +231,7 @@ def get_file_size(path):
 
 def get_file_checksum(path, algorithm=None, block_size=1024 * 1024):
     if algorithm is None:
-        algorithm = get_d1_config().default_checksum
+        algorithm = configuration.checksum_alg
     h = d1_common.util.get_checksum_calculator_by_dataone_designator(algorithm)
     with open(expand_path(path), 'r') as f:
         while True:
@@ -491,14 +418,16 @@ def get_sysmeta_by_pid(pid, search_mn=False, cn_client=None, mn_client=None):
 
 
 def run_test():
-    mn_url = "https://mn-demo-9.test.dataone.org/knb/d1/mn"
-    cn_client = get_d1_cn_client("https://cn-stage-2.test.dataone.org/cn")
-    mn_client = get_d1_mn_client(mn_url)
+    configuration.mn_url = "https://mn-demo-9.test.dataone.org/knb/d1/mn"
+    configuration.cn_url = "https://cn-stage-2.test.dataone.org/cn"
+    cn_client = get_d1_cn_client()
+    mn_client = get_d1_mn_client()
     fname = "/vistrails/local_packages/dataone/test_data.csv"
-    pid = "dakoop_test500"
+    pid = "dakoop_test502"
     sysmeta = create_sysmeta_from_path(pid, fname, format_id="text/csv",
                                        submitter="dakoop", owner="dakoop",
-                                       orig_mn=mn_url, auth_mn=mn_url)
+                                       orig_mn=configuration.mn_url, 
+                                       auth_mn=configuration.mn_url)
     f = open(fname, 'r')
     retval = mn_client.create(pid, f, sysmeta)
     f.close()
